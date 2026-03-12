@@ -37,6 +37,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
     private static final String FIELD_CODEMP = "CODEMP";
     private static final String FIELD_VLRNOTA = "VLRNOTA";
 
+    private static final BigDecimal CODEMP_ALVO = new BigDecimal("5");
     private static final int STATUS_XML_PROCESSADO = 5;
     private static final int JANELA_DIAS_FALLBACK = 15;
 
@@ -80,6 +81,8 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         BigDecimal codParc = getBigDecimal(cab, FIELD_CODPARC);
         BigDecimal codEmp = getBigDecimal(cab, FIELD_CODEMP);
         BigDecimal vlrNota = getBigDecimal(cab, FIELD_VLRNOTA);
+
+        if (codEmp == null || codEmp.compareTo(CODEMP_ALVO) != 0) return;
 
         EntityFacade facade = EntityFacadeFactory.getDWFFacade();
         JdbcWrapper jdbc = facade.getJdbcWrapper();
