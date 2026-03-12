@@ -32,10 +32,13 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
     private static final Logger LOGGER = Logger.getLogger(VinculaPedidoMarketplaceXmlTGFCAB.class.getName());
 
     private static final String FIELD_NUNOTA = "NUNOTA";
+    private static final String FIELD_NUMNOTA = "NUMNOTA";
     private static final String FIELD_TIPMOV = "TIPMOV";
     private static final String FIELD_CODPARC = "CODPARC";
     private static final String FIELD_CODEMP = "CODEMP";
     private static final String FIELD_VLRNOTA = "VLRNOTA";
+    private static final String FIELD_AD_NRONTOAORIGEM = "AD_NRONTOAORIGEM";
+    private static final String FIELD_AD_NUNOTADEV = "AD_NUNOTADEV";
 
     private static final BigDecimal CODEMP_ALVO = new BigDecimal("5");
     private static final int STATUS_XML_PROCESSADO = 5;
@@ -72,11 +75,10 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
     private void processar(PersistenceEvent event, String origemEvento) throws Exception {
         DynamicVO cab = (DynamicVO) event.getVo();
-        BigDecimal nunotaFat = getBigDecimal(cab, FIELD_NUNOTA);
+        BigDecimal nunota = getBigDecimal(cab, FIELD_NUNOTA);
         String tipmov = getString(cab, FIELD_TIPMOV);
 
-        if (nunotaFat == null) return;
-        if (!"V".equalsIgnoreCase(tipmov)) return;
+        if (nunota == null) return;
 
         BigDecimal codParc = getBigDecimal(cab, FIELD_CODPARC);
         BigDecimal codEmp = getBigDecimal(cab, FIELD_CODEMP);
@@ -91,7 +93,20 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         try {
             jdbc.openSession();
 
-            XmlInfo xmlInfo = buscarXmlInfo(sql, nunotaFat);
+            if ("V".equalsIgnoreCase(tipmov)) {
+                processarFaturamento(sql, nunota, codEmp, codParc, vlrNota, origemEvento);
+            } else if ("D".equalsIgnoreCase(tipmov)) {
+                processarDevolucao(sql, nunota, origemEvento);
+            }
+        } finally {
+            NativeSql.releaseResources(sql);
+            JdbcWrapper.closeSession(jdbc);
+        }
+    }
+
+    private void processarFaturamento(NativeSql sql, BigDecimal nunotaFat, BigDecimal codEmp, BigDecimal codParc,
+                                      BigDecimal vlrNota, String origemEvento) throws Exception {
+        XmlInfo xmlInfo = buscarXmlInfo(sql, nunotaFat);
             if (xmlInfo == null) return;
 
             BigDecimal nunotaPedido = xmlInfo.nunotaOrigem;
@@ -115,6 +130,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
             atualizarNunotaOrigemNoXml(sql, xmlInfo.nuarquivo, nunotaPedido);
             boolean executouInsercaoTgfvar = inserirVinculosTgfvar(sql, nunotaFat, nunotaPedido);
+            atualizarPedidoComNumeroNotaSaida(sql, nunotaPedido, nunotaFat);
 
             if (!executouInsercaoTgfvar && !existeVinculoTgfvar(sql, nunotaFat, nunotaPedido)) {
                 registrarLogXml(sql, xmlInfo.nuarquivo,
@@ -129,11 +145,17 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
                             + ", XPED=" + safe(xped)
                             + ", tgfvarAtualizado=" + executouInsercaoTgfvar
                             + ", evento=" + origemEvento);
+    }
 
-        } finally {
-            NativeSql.releaseResources(sql);
-            JdbcWrapper.closeSession(jdbc);
+    private void processarDevolucao(NativeSql sql, BigDecimal nunotaDev, String origemEvento) throws Exception {
+        BigDecimal nunotaPedido = localizarPedidoPorDevolucao(sql, nunotaDev);
+        if (nunotaPedido == null) {
+            LOGGER.info("[VINCXML] Devolucao sem pedido identificado. NUNOTA DEV=" + nunotaDev + ", evento=" + origemEvento);
+            return;
         }
+
+        atualizarPedidoComNunotaDevolucao(sql, nunotaPedido, nunotaDev);
+        LOGGER.info("[VINCXML] Devolucao vinculada ao pedido. DEV=" + nunotaDev + ", PED=" + nunotaPedido + ", evento=" + origemEvento);
     }
 
     private XmlInfo buscarXmlInfo(NativeSql sql, BigDecimal nunotaFat) throws Exception {
@@ -307,6 +329,118 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.setNamedParameter("NUNOTAPED", nunotaPedido);
         sql.setNamedParameter("NUARQ", nuarquivo);
         sql.executeUpdate();
+    }
+
+    private void atualizarPedidoComNumeroNotaSaida(NativeSql sql, BigDecimal nunotaPedido, BigDecimal nunotaFat) throws Exception {
+        BigDecimal numNotaFat = obterNumNota(sql, nunotaFat);
+        if (numNotaFat == null || numNotaFat.compareTo(BigDecimal.ZERO) <= 0) return;
+
+        sql.resetSqlBuf();
+        sql.appendSql("UPDATE TGFCAB ");
+        sql.appendSql("   SET ").appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" = :NUMNOTAFAT ");
+        sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
+        sql.appendSql("   AND (").appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" IS NULL OR ")
+                .appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" <> :NUMNOTAFAT) ");
+        sql.setNamedParameter("NUMNOTAFAT", numNotaFat);
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        sql.executeUpdate();
+    }
+
+    private void atualizarPedidoComNunotaDevolucao(NativeSql sql, BigDecimal nunotaPedido, BigDecimal nunotaDev) throws Exception {
+        sql.resetSqlBuf();
+        sql.appendSql("UPDATE TGFCAB ");
+        sql.appendSql("   SET ").appendSql(FIELD_AD_NUNOTADEV).appendSql(" = :NUNOTADEV ");
+        sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
+        sql.appendSql("   AND (").appendSql(FIELD_AD_NUNOTADEV).appendSql(" IS NULL OR ")
+                .appendSql(FIELD_AD_NUNOTADEV).appendSql(" <> :NUNOTADEV) ");
+        sql.setNamedParameter("NUNOTADEV", nunotaDev);
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        sql.executeUpdate();
+    }
+
+    private BigDecimal localizarPedidoPorDevolucao(NativeSql sql, BigDecimal nunotaDev) throws Exception {
+        BigDecimal nunotaOrigDireta = obterNunotaOrigemDireta(sql, nunotaDev);
+        if (nunotaOrigDireta == null) return null;
+
+        String tipmovOrig = obterTipMov(sql, nunotaOrigDireta);
+        if ("P".equalsIgnoreCase(tipmovOrig)) {
+            return nunotaOrigDireta;
+        }
+
+        if ("V".equalsIgnoreCase(tipmovOrig)) {
+            BigDecimal nunotaPedido = obterNunotaOrigemDireta(sql, nunotaOrigDireta);
+            if (nunotaPedido != null && "P".equalsIgnoreCase(obterTipMov(sql, nunotaPedido))) {
+                return nunotaPedido;
+            }
+        }
+
+        // Fallback: cadeia DEV -> VENDA -> PEDIDO pela TGFVAR.
+        sql.resetSqlBuf();
+        sql.appendSql("SELECT p.NUNOTA ");
+        sql.appendSql("  FROM TGFCAB p ");
+        sql.appendSql(" WHERE p.TIPMOV = 'P' ");
+        sql.appendSql("   AND EXISTS ( ");
+        sql.appendSql("       SELECT 1 ");
+        sql.appendSql("         FROM TGFVAR vfat ");
+        sql.appendSql("        WHERE vfat.NUNOTAORIG = p.NUNOTA ");
+        sql.appendSql("          AND EXISTS ( ");
+        sql.appendSql("              SELECT 1 ");
+        sql.appendSql("                FROM TGFVAR vdev ");
+        sql.appendSql("               WHERE vdev.NUNOTA = :NUNOTADEV ");
+        sql.appendSql("                 AND vdev.NUNOTAORIG = vfat.NUNOTA ");
+        sql.appendSql("          ) ");
+        sql.appendSql("   ) ");
+        sql.appendSql(" ORDER BY p.DTNEG DESC, p.NUNOTA DESC ");
+        sql.setNamedParameter("NUNOTADEV", nunotaDev);
+        return obterUnicoOuNulo(sql, "NUNOTA");
+    }
+
+    private BigDecimal obterNunotaOrigemDireta(NativeSql sql, BigDecimal nunota) throws Exception {
+        ResultSet rs = null;
+        try {
+            sql.resetSqlBuf();
+            sql.appendSql("SELECT MIN(v.NUNOTAORIG) AS NUNOTAORIG ");
+            sql.appendSql("  FROM TGFVAR v ");
+            sql.appendSql(" WHERE v.NUNOTA = :NUNOTA ");
+            sql.setNamedParameter("NUNOTA", nunota);
+            rs = sql.executeQuery();
+            if (!rs.next()) return null;
+            return rs.getBigDecimal("NUNOTAORIG");
+        } finally {
+            closeQuietly(rs);
+        }
+    }
+
+    private BigDecimal obterNumNota(NativeSql sql, BigDecimal nunota) throws Exception {
+        ResultSet rs = null;
+        try {
+            sql.resetSqlBuf();
+            sql.appendSql("SELECT ").appendSql(FIELD_NUMNOTA).appendSql(" ");
+            sql.appendSql("  FROM TGFCAB ");
+            sql.appendSql(" WHERE NUNOTA = :NUNOTA ");
+            sql.setNamedParameter("NUNOTA", nunota);
+            rs = sql.executeQuery();
+            if (!rs.next()) return null;
+            return rs.getBigDecimal(FIELD_NUMNOTA);
+        } finally {
+            closeQuietly(rs);
+        }
+    }
+
+    private String obterTipMov(NativeSql sql, BigDecimal nunota) throws Exception {
+        ResultSet rs = null;
+        try {
+            sql.resetSqlBuf();
+            sql.appendSql("SELECT ").appendSql(FIELD_TIPMOV).appendSql(" ");
+            sql.appendSql("  FROM TGFCAB ");
+            sql.appendSql(" WHERE NUNOTA = :NUNOTA ");
+            sql.setNamedParameter("NUNOTA", nunota);
+            rs = sql.executeQuery();
+            if (!rs.next()) return null;
+            return rs.getString(FIELD_TIPMOV);
+        } finally {
+            closeQuietly(rs);
+        }
     }
 
     private Set<String> buscarColunasExistentes(NativeSql sql, List<String> colunas) throws Exception {
