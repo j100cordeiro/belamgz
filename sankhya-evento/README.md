@@ -13,6 +13,9 @@ Fluxo da classe:
 4. Localiza pedido (`TIPMOV='P'`) por campos de marketplace (`AD_PEDIDOMKTPLACE`, `BH_CODEMKT`, etc).
 5. Preenche `TGFIXN.AD_NUNOTAORIG`.
 6. Cria vinculo item-a-item em `TGFVAR` sem duplicar.
+7. Copia `NUMNOTA` da NF no pedido (`TGFCAB.AD_NRONTOAORIGEM`).
+8. Marca pedido como nao pendente (`TGFCAB.PENDENTE = 'N'`) apos vinculo valido.
+9. Em devolucao (`TIPMOV='D'`), preenche `TGFCAB.AD_NUNOTADEV` no pedido.
 
 ## Cadastro no Sankhya
 No Dicionario de Dados > `TGFCAB` > Eventos:

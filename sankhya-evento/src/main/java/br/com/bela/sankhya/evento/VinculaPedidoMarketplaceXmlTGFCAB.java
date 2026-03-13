@@ -1,6 +1,7 @@
 package br.com.bela.sankhya.evento;
 
 import java.math.BigDecimal;
+import java.lang.reflect.Method;
 import java.sql.ResultSet;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -15,7 +16,6 @@ import br.com.sankhya.jape.EntityFacade;
 import br.com.sankhya.jape.dao.JdbcWrapper;
 import br.com.sankhya.jape.event.PersistenceEvent;
 import br.com.sankhya.jape.sql.NativeSql;
-import br.com.sankhya.jape.vo.DynamicVO;
 import br.com.sankhya.modelcore.util.EntityFacadeFactory;
 
 /**
@@ -39,6 +39,9 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
     private static final String FIELD_VLRNOTA = "VLRNOTA";
     private static final String FIELD_AD_NRONTOAORIGEM = "AD_NRONTOAORIGEM";
     private static final String FIELD_AD_NUNOTADEV = "AD_NUNOTADEV";
+    private static final String FIELD_PENDENTE = "PENDENTE";
+
+    private static final String VALUE_NAO_PENDENTE = "N";
 
     private static final BigDecimal CODEMP_ALVO = new BigDecimal("5");
     private static final int STATUS_XML_PROCESSADO = 5;
@@ -68,13 +71,14 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
     private void processarComSeguranca(PersistenceEvent event, String origemEvento) {
         try {
             processar(event, origemEvento);
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // Blindagem para producao: nao interrompe fluxo da tela/servico por falha do evento.
             LOGGER.log(Level.SEVERE, "[VINCXML] Falha no evento " + origemEvento, e);
         }
     }
 
     private void processar(PersistenceEvent event, String origemEvento) throws Exception {
-        DynamicVO cab = (DynamicVO) event.getVo();
+        Object cab = extrairVoCompat(event);
         BigDecimal nunota = getBigDecimal(cab, FIELD_NUNOTA);
         String tipmov = getString(cab, FIELD_TIPMOV);
 
@@ -130,7 +134,6 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
             atualizarNunotaOrigemNoXml(sql, xmlInfo.nuarquivo, nunotaPedido);
             boolean executouInsercaoTgfvar = inserirVinculosTgfvar(sql, nunotaFat, nunotaPedido);
-            atualizarPedidoComNumeroNotaSaida(sql, nunotaPedido, nunotaFat);
 
             if (!executouInsercaoTgfvar && !existeVinculoTgfvar(sql, nunotaFat, nunotaPedido)) {
                 registrarLogXml(sql, xmlInfo.nuarquivo,
@@ -138,6 +141,9 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
                                 + nunotaFat + ", PED=" + nunotaPedido);
                 return;
             }
+
+            atualizarPedidoComNumeroNotaSaida(sql, nunotaPedido, nunotaFat);
+            atualizarPedidoComoNaoPendente(sql, nunotaPedido);
 
             registrarLogXml(sql, xmlInfo.nuarquivo,
                     "Vinculo OK. FAT=" + nunotaFat
@@ -358,6 +364,18 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.executeUpdate();
     }
 
+    private void atualizarPedidoComoNaoPendente(NativeSql sql, BigDecimal nunotaPedido) throws Exception {
+        sql.resetSqlBuf();
+        sql.appendSql("UPDATE TGFCAB ");
+        sql.appendSql("   SET ").appendSql(FIELD_PENDENTE).appendSql(" = :NAOPENDENTE ");
+        sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
+        sql.appendSql("   AND (").appendSql(FIELD_PENDENTE).appendSql(" IS NULL OR UPPER(TRIM(")
+                .appendSql(FIELD_PENDENTE).appendSql(")) <> :NAOPENDENTE) ");
+        sql.setNamedParameter("NAOPENDENTE", VALUE_NAO_PENDENTE);
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        sql.executeUpdate();
+    }
+
     private BigDecimal localizarPedidoPorDevolucao(NativeSql sql, BigDecimal nunotaDev) throws Exception {
         BigDecimal nunotaOrigDireta = obterNunotaOrigemDireta(sql, nunotaDev);
         if (nunotaOrigDireta == null) return null;
@@ -529,9 +547,36 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         return txt == null ? "<null>" : txt;
     }
 
-    private BigDecimal getBigDecimal(DynamicVO vo, String field) {
+    private Object extrairVoCompat(PersistenceEvent event) {
+        if (event == null) return null;
         try {
-            Object value = vo.getProperty(field);
+            Method m = event.getClass().getMethod("getVo");
+            return m.invoke(event);
+        } catch (Exception e) {
+            try {
+                // Compatibilidade extra para ambientes legados.
+                Method m = event.getClass().getMethod("getVO");
+                return m.invoke(event);
+            } catch (Exception ignored) {
+                LOGGER.log(Level.WARNING, "[VINCXML] Nao foi possivel obter VO do evento", e);
+                return null;
+            }
+        }
+    }
+
+    private Object getPropertyValue(Object vo, String field) {
+        if (vo == null || field == null) return null;
+        try {
+            Method getter = vo.getClass().getMethod("getProperty", String.class);
+            return getter.invoke(vo, field);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private BigDecimal getBigDecimal(Object vo, String field) {
+        try {
+            Object value = getPropertyValue(vo, field);
             if (value == null) return null;
             if (value instanceof BigDecimal) return (BigDecimal) value;
             if (value instanceof Number) return new BigDecimal(value.toString());
@@ -541,9 +586,9 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         }
     }
 
-    private String getString(DynamicVO vo, String field) {
+    private String getString(Object vo, String field) {
         try {
-            Object value = vo.getProperty(field);
+            Object value = getPropertyValue(vo, field);
             return value == null ? null : value.toString();
         } catch (Exception e) {
             return null;
