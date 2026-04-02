@@ -37,6 +37,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
     private static final String FIELD_CODPARC = "CODPARC";
     private static final String FIELD_CODEMP = "CODEMP";
     private static final String FIELD_VLRNOTA = "VLRNOTA";
+    private static final String FIELD_STATUS = "STATUS";
     private static final String FIELD_AD_NRONTOAORIGEM = "AD_NRONTOAORIGEM";
     private static final String FIELD_AD_NUNOTADEV = "AD_NUNOTADEV";
     private static final String FIELD_PENDENTE = "PENDENTE";
@@ -45,6 +46,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
     private static final BigDecimal CODEMP_ALVO = new BigDecimal("5");
     private static final int STATUS_XML_PROCESSADO = 5;
+    private static final int STATUS_XML_GERADO = 4;
     private static final int JANELA_DIAS_FALLBACK = 15;
 
     // Campos comuns de marketplace ja vistos em ambientes Sankhya.
@@ -97,10 +99,23 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         try {
             jdbc.openSession();
 
+            // Evento aplicado em TGFCAB (TIPMOV disponivel).
             if ("V".equalsIgnoreCase(tipmov)) {
                 processarFaturamento(sql, nunota, codEmp, codParc, vlrNota, origemEvento);
             } else if ("D".equalsIgnoreCase(tipmov)) {
                 processarDevolucao(sql, nunota, origemEvento);
+            } else if (tipmov == null) {
+                // Compatibilidade: quando cadastrado em TGFIXN, VO nao possui TIPMOV.
+                // Nesse caso, busca o cabecalho da nota do XML e processa se for venda da empresa 5.
+                BigDecimal status = getBigDecimal(cab, FIELD_STATUS);
+                if (status != null
+                        && (status.intValue() == STATUS_XML_PROCESSADO || status.intValue() == STATUS_XML_GERADO)) {
+                    CabInfo info = carregarCabInfo(sql, nunota);
+                    if (info != null && info.codEmp != null && info.codEmp.compareTo(CODEMP_ALVO) == 0
+                            && "V".equalsIgnoreCase(info.tipmov)) {
+                        processarFaturamento(sql, nunota, info.codEmp, info.codParc, info.vlrNota, origemEvento + "_ixn");
+                    }
+                }
             }
         } finally {
             NativeSql.releaseResources(sql);
@@ -115,13 +130,27 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
             BigDecimal nunotaPedido = xmlInfo.nunotaOrigem;
             String xped = normalizarIdMarketplace(xmlInfo.xped);
+            String criterioVinculo = "TGFIXN.AD_NUNOTAORIG";
+
+            if (nunotaPedido == null) {
+                nunotaPedido = localizarPedidoPorVinculoExistente(sql, nunotaFat);
+                if (nunotaPedido != null) {
+                    criterioVinculo = "TGFVAR_EXISTENTE";
+                }
+            }
 
             if (nunotaPedido == null) {
                 nunotaPedido = localizarPedidoPorXPed(sql, xped, codEmp, codParc, vlrNota);
+                if (nunotaPedido != null) {
+                    criterioVinculo = "XPED";
+                }
             }
 
             if (nunotaPedido == null) {
                 nunotaPedido = localizarPedidoPorFallback(sql, nunotaFat, codEmp, codParc, vlrNota);
+                if (nunotaPedido != null) {
+                    criterioVinculo = "FALLBACK_RANKEADO";
+                }
             }
 
             if (nunotaPedido == null) {
@@ -134,6 +163,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
 
             atualizarNunotaOrigemNoXml(sql, xmlInfo.nuarquivo, nunotaPedido);
             boolean executouInsercaoTgfvar = inserirVinculosTgfvar(sql, nunotaFat, nunotaPedido);
+            boolean limpouConcorrentes = limparVinculosConcorrentesDaNota(sql, nunotaFat, nunotaPedido);
 
             if (!executouInsercaoTgfvar && !existeVinculoTgfvar(sql, nunotaFat, nunotaPedido)) {
                 registrarLogXml(sql, xmlInfo.nuarquivo,
@@ -149,7 +179,9 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
                     "Vinculo OK. FAT=" + nunotaFat
                             + ", PED=" + nunotaPedido
                             + ", XPED=" + safe(xped)
+                            + ", criterio=" + criterioVinculo
                             + ", tgfvarAtualizado=" + executouInsercaoTgfvar
+                            + ", tgfvarConcorrenteRemovido=" + limpouConcorrentes
                             + ", evento=" + origemEvento);
     }
 
@@ -173,12 +205,13 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
             sql.appendSql("         REGEXP_SUBSTR(DBMS_LOB.SUBSTR(i.XML, 4000, 1), '<xPed>([^<]+)</xPed>', 1, 1, NULL, 1) AS XPED ");
             sql.appendSql("    FROM TGFIXN i ");
             sql.appendSql("   WHERE i.NUNOTA = :NUNOTA ");
-            sql.appendSql("     AND i.STATUS = :STATUS ");
+            sql.appendSql("     AND i.STATUS IN (:STATUSPROC, :STATUSGER) ");
             sql.appendSql("   ORDER BY i.DHPROCESS DESC NULLS LAST, i.NUARQUIVO DESC ");
             sql.appendSql(") WHERE ROWNUM = 1 ");
 
             sql.setNamedParameter("NUNOTA", nunotaFat);
-            sql.setNamedParameter("STATUS", new BigDecimal(STATUS_XML_PROCESSADO));
+            sql.setNamedParameter("STATUSPROC", new BigDecimal(STATUS_XML_PROCESSADO));
+            sql.setNamedParameter("STATUSGER", new BigDecimal(STATUS_XML_GERADO));
             rs = sql.executeQuery();
 
             if (!rs.next()) return null;
@@ -221,7 +254,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         if (codParc != null) {
             sql.appendSql("   AND c.CODPARC = :CODPARC ");
         }
-        if (vlrNota != null) {
+        if (vlrNota != null && vlrNota.compareTo(BigDecimal.ZERO) > 0) {
             sql.appendSql("   AND ABS(NVL(c.VLRNOTA, 0) - :VLRNOTA) <= 0.01 ");
         }
         sql.appendSql("   AND (").appendSql(or.toString()).appendSql(") ");
@@ -230,15 +263,26 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.setNamedParameter("XPED", xped);
         if (codEmp != null) sql.setNamedParameter("CODEMP", codEmp);
         if (codParc != null) sql.setNamedParameter("CODPARC", codParc);
-        if (vlrNota != null) sql.setNamedParameter("VLRNOTA", vlrNota);
+        if (vlrNota != null && vlrNota.compareTo(BigDecimal.ZERO) > 0) sql.setNamedParameter("VLRNOTA", vlrNota);
 
         return obterUnicoOuNulo(sql, "NUNOTA");
     }
 
     private BigDecimal localizarPedidoPorFallback(NativeSql sql, BigDecimal nunotaFat, BigDecimal codEmp,
                                                   BigDecimal codParc, BigDecimal vlrNota) throws Exception {
+        ResultSet rs = null;
         sql.resetSqlBuf();
-        sql.appendSql("SELECT c.NUNOTA ");
+        sql.appendSql("SELECT c.NUNOTA, ");
+        sql.appendSql("       CASE WHEN EXISTS ( ");
+        sql.appendSql("              SELECT 1 ");
+        sql.appendSql("                FROM TGFVAR vx ");
+        sql.appendSql("                JOIN TGFCAB fx ON fx.NUNOTA = vx.NUNOTA ");
+        sql.appendSql("               WHERE vx.NUNOTAORIG = c.NUNOTA ");
+        sql.appendSql("                 AND vx.NUNOTA <> :NUNOTAFAT ");
+        sql.appendSql("                 AND fx.TIPMOV = 'V' ");
+        sql.appendSql("            ) THEN 1 ELSE 0 END AS SCORE_JA_FATURADO, ");
+        sql.appendSql("       CASE WHEN UPPER(TRIM(NVL(c.PENDENTE, 'S'))) = 'S' THEN 0 ELSE 1 END AS SCORE_PENDENTE, ");
+        sql.appendSql("       CASE WHEN c.").appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" IS NULL THEN 0 ELSE 1 END AS SCORE_ORIGEM ");
         sql.appendSql("  FROM TGFCAB c ");
         sql.appendSql(" WHERE c.TIPMOV = 'P' ");
         sql.appendSql("   AND c.DTNEG >= TRUNC(SYSDATE) - :DIAS ");
@@ -248,7 +292,7 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         if (codParc != null) {
             sql.appendSql("   AND c.CODPARC = :CODPARC ");
         }
-        if (vlrNota != null) {
+        if (vlrNota != null && vlrNota.compareTo(BigDecimal.ZERO) > 0) {
             sql.appendSql("   AND ABS(NVL(c.VLRNOTA, 0) - :VLRNOTA) <= 0.01 ");
         }
         sql.appendSql("   AND EXISTS ( ");
@@ -262,15 +306,90 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.appendSql("                     AND nf.CODPROD = ped.CODPROD ");
         sql.appendSql("            ) ");
         sql.appendSql("   ) ");
-        sql.appendSql(" ORDER BY c.DTNEG DESC, c.NUNOTA DESC ");
+        sql.appendSql(" ORDER BY SCORE_JA_FATURADO ASC, SCORE_PENDENTE ASC, SCORE_ORIGEM ASC, c.DTNEG DESC, c.NUNOTA DESC ");
 
         sql.setNamedParameter("DIAS", new BigDecimal(JANELA_DIAS_FALLBACK));
         sql.setNamedParameter("NUNOTAFAT", nunotaFat);
         if (codEmp != null) sql.setNamedParameter("CODEMP", codEmp);
         if (codParc != null) sql.setNamedParameter("CODPARC", codParc);
-        if (vlrNota != null) sql.setNamedParameter("VLRNOTA", vlrNota);
+        if (vlrNota != null && vlrNota.compareTo(BigDecimal.ZERO) > 0) sql.setNamedParameter("VLRNOTA", vlrNota);
 
-        return obterUnicoOuNulo(sql, "NUNOTA");
+        try {
+            rs = sql.executeQuery();
+            BigDecimal escolhido = null;
+            int count = 0;
+            while (rs.next()) {
+                if (escolhido == null) {
+                    escolhido = rs.getBigDecimal("NUNOTA");
+                }
+                count++;
+                if (count >= 2) break;
+            }
+            if (count > 1) {
+                LOGGER.info("[VINCXML] Fallback ambiguo resolvido por ranking. FAT=" + nunotaFat + ", PED escolhido=" + escolhido);
+            }
+            return escolhido;
+        } finally {
+            closeQuietly(rs);
+        }
+    }
+
+    private BigDecimal localizarPedidoPorVinculoExistente(NativeSql sql, BigDecimal nunotaFat) throws Exception {
+        ResultSet rs = null;
+        try {
+            sql.resetSqlBuf();
+            sql.appendSql("SELECT v.NUNOTAORIG, COUNT(*) AS QTD ");
+            sql.appendSql("  FROM TGFVAR v ");
+            sql.appendSql("  JOIN TGFCAB p ON p.NUNOTA = v.NUNOTAORIG ");
+            sql.appendSql(" WHERE v.NUNOTA = :NUNOTAFAT ");
+            sql.appendSql("   AND p.TIPMOV = 'P' ");
+            sql.appendSql(" GROUP BY v.NUNOTAORIG ");
+            sql.appendSql(" ORDER BY QTD DESC, v.NUNOTAORIG DESC ");
+            sql.setNamedParameter("NUNOTAFAT", nunotaFat);
+            rs = sql.executeQuery();
+
+            BigDecimal escolhido = null;
+            int count = 0;
+            while (rs.next()) {
+                if (escolhido == null) {
+                    escolhido = rs.getBigDecimal("NUNOTAORIG");
+                }
+                count++;
+                if (count >= 2) break;
+            }
+            if (count > 1) {
+                LOGGER.info("[VINCXML] Multiplos pedidos ja vinculados na TGFVAR. FAT=" + nunotaFat
+                        + ", mantendo PED=" + escolhido + " e saneando concorrentes.");
+            }
+            return escolhido;
+        } finally {
+            closeQuietly(rs);
+        }
+    }
+
+    private CabInfo carregarCabInfo(NativeSql sql, BigDecimal nunota) throws Exception {
+        ResultSet rs = null;
+        try {
+            sql.resetSqlBuf();
+            sql.appendSql("SELECT ").appendSql(FIELD_TIPMOV).appendSql(", ")
+                    .appendSql(FIELD_CODEMP).appendSql(", ")
+                    .appendSql(FIELD_CODPARC).appendSql(", ")
+                    .appendSql(FIELD_VLRNOTA).appendSql(" ");
+            sql.appendSql("  FROM TGFCAB ");
+            sql.appendSql(" WHERE NUNOTA = :NUNOTA ");
+            sql.setNamedParameter("NUNOTA", nunota);
+            rs = sql.executeQuery();
+            if (!rs.next()) return null;
+
+            CabInfo info = new CabInfo();
+            info.tipmov = rs.getString(FIELD_TIPMOV);
+            info.codEmp = rs.getBigDecimal(FIELD_CODEMP);
+            info.codParc = rs.getBigDecimal(FIELD_CODPARC);
+            info.vlrNota = rs.getBigDecimal(FIELD_VLRNOTA);
+            return info;
+        } finally {
+            closeQuietly(rs);
+        }
     }
 
     private boolean inserirVinculosTgfvar(NativeSql sql, BigDecimal nunotaFat, BigDecimal nunotaPedido) throws Exception {
@@ -325,6 +444,23 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         }
     }
 
+    private boolean limparVinculosConcorrentesDaNota(NativeSql sql, BigDecimal nunotaFat, BigDecimal nunotaPedido) throws Exception {
+        sql.resetSqlBuf();
+        sql.appendSql("DELETE FROM TGFVAR v ");
+        sql.appendSql(" WHERE v.NUNOTA = :NUNOTAFAT ");
+        sql.appendSql("   AND v.NUNOTAORIG <> :NUNOTAPED ");
+        sql.appendSql("   AND EXISTS ( ");
+        sql.appendSql("       SELECT 1 ");
+        sql.appendSql("         FROM TGFVAR keepv ");
+        sql.appendSql("        WHERE keepv.NUNOTA = v.NUNOTA ");
+        sql.appendSql("          AND keepv.SEQUENCIA = v.SEQUENCIA ");
+        sql.appendSql("          AND keepv.NUNOTAORIG = :NUNOTAPED ");
+        sql.appendSql("   ) ");
+        sql.setNamedParameter("NUNOTAFAT", nunotaFat);
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        return sql.executeUpdate();
+    }
+
     private void atualizarNunotaOrigemNoXml(NativeSql sql, BigDecimal nuarquivo, BigDecimal nunotaPedido) throws Exception {
         if (nuarquivo == null || nunotaPedido == null) return;
         sql.resetSqlBuf();
@@ -347,6 +483,16 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
         sql.appendSql("   AND (").appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" IS NULL OR ")
                 .appendSql(FIELD_AD_NRONTOAORIGEM).appendSql(" <> :NUMNOTAFAT) ");
+        sql.setNamedParameter("NUMNOTAFAT", numNotaFat);
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        sql.executeUpdate();
+
+        sql.resetSqlBuf();
+        sql.appendSql("UPDATE TGFCAB ");
+        sql.appendSql("   SET ").appendSql(FIELD_NUMNOTA).appendSql(" = :NUMNOTAFAT ");
+        sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
+        sql.appendSql("   AND (").appendSql(FIELD_NUMNOTA).appendSql(" IS NULL OR ")
+                .appendSql(FIELD_NUMNOTA).appendSql(" <> :NUMNOTAFAT) ");
         sql.setNamedParameter("NUMNOTAFAT", numNotaFat);
         sql.setNamedParameter("NUNOTAPED", nunotaPedido);
         sql.executeUpdate();
@@ -607,5 +753,12 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         private BigDecimal nuarquivo;
         private BigDecimal nunotaOrigem;
         private String xped;
+    }
+
+    private static final class CabInfo {
+        private String tipmov;
+        private BigDecimal codEmp;
+        private BigDecimal codParc;
+        private BigDecimal vlrNota;
     }
 }
