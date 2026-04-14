@@ -1,0 +1,1 @@
+echo ''kiriku#1060'' | sudo -S -u bela.roger bash -lc "ls -la /home/bela.roger/looker; printf ''\n---\n''; ls -la /home/bela.roger/looker/src; printf ''\n---\n''; find /home/bela.roger/looker -maxdepth 2 -type f | grep -E ''env|config|ini|yaml|yml''"

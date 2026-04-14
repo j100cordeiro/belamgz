@@ -1,0 +1,13 @@
+echo 'kiriku#1060' | sudo -S -u bela.roger bash -lc "python3 - <<'PY'
+import csv
+targets = {'3837864','3839184','3837861','3837867','3839274','3837759','3839213','3837760','3838337','3837764'}
+hits = []
+with open('/home/bela.roger/looker/csv/transporte.csv', newline='') as f:
+    reader = csv.reader(f, delimiter=',', quotechar=\"'\")
+    for row in reader:
+        if any(cell in targets for cell in row):
+            hits.append(row)
+for row in hits:
+    print(row)
+print('TOTAL', len(hits))
+PY"

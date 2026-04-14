@@ -1,0 +1,6 @@
+CONNECT jackson/"kiriku#1060"@//127.0.0.1:11521/skwpdb.sub03311532240.vncbela.oraclevcn.com
+SET PAGESIZE 100
+SET LINESIZE 32767
+SET FEEDBACK OFF
+SELECT 1 AS ok FROM dual;
+EXIT
