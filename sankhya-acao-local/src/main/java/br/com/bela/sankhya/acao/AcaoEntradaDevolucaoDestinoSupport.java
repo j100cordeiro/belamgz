@@ -7,8 +7,8 @@ import br.com.sankhya.jape.vo.DynamicVO;
 import br.com.sankhya.jape.wrapper.JapeFactory;
 import br.com.sankhya.jape.wrapper.JapeWrapper;
 import br.com.sankhya.jape.wrapper.fluid.FluidUpdateVO;
+import br.com.sankhya.modelcore.comercial.centrais.CACHelper;
 import br.com.sankhya.modelcore.util.EntityFacadeFactory;
-import br.com.sankhya.platform.services.ConfirmacaoNotaService;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -256,10 +256,8 @@ final class AcaoEntradaDevolucaoDestinoSupport {
 
     private static void confirmarNotaGerada(JapeWrapper cabecalhoDao, BigDecimal nunotaGerada, ContextoAcao contexto)
             throws Exception {
-        ConfirmacaoNotaService confirmacaoNotaService = new ConfirmacaoNotaService();
-        confirmacaoNotaService.set("NUNOTA", nunotaGerada);
-        confirmacaoNotaService.set("execAndCommit", Boolean.TRUE);
-        confirmacaoNotaService.execute();
+        CACHelper cacHelper = new CACHelper();
+        cacHelper.processarConfirmacao(nunotaGerada, false, true);
 
         DynamicVO notaConfirmada = cabecalhoDao.findOne("NUNOTA = ?", nunotaGerada);
         if (notaConfirmada == null || !"L".equals(notaConfirmada.asString("STATUSNOTA"))) {
