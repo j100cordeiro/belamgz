@@ -8,6 +8,7 @@ import br.com.sankhya.jape.wrapper.JapeFactory;
 import br.com.sankhya.jape.wrapper.JapeWrapper;
 import br.com.sankhya.jape.wrapper.fluid.FluidUpdateVO;
 import br.com.sankhya.modelcore.auth.AuthenticationInfo;
+import br.com.sankhya.modelcore.auth.AuthenticationServiceContext;
 import br.com.sankhya.modelcore.comercial.BarramentoRegra;
 import br.com.sankhya.modelcore.comercial.ConfirmacaoNotaHelper;
 import br.com.sankhya.modelcore.comercial.centrais.CACHelper;
@@ -259,10 +260,12 @@ final class AcaoEntradaDevolucaoDestinoSupport {
 
     private static void confirmarNotaGerada(JapeWrapper cabecalhoDao, BigDecimal nunotaGerada, ContextoAcao contexto)
             throws Exception {
+        AuthenticationInfo auth = AuthenticationInfo.getCurrent();
+        AuthenticationServiceContext.setup(auth);
         BarramentoRegra barramento = BarramentoRegra.build(
                 CACHelper.class,
                 "regrasConfirmacaoCAC.xml",
-                AuthenticationInfo.getCurrent());
+                auth);
         ConfirmacaoNotaHelper.confirmarNota(nunotaGerada, barramento);
 
         DynamicVO notaConfirmada = cabecalhoDao.findOne("NUNOTA = ?", nunotaGerada);
