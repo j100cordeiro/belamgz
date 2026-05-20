@@ -8,6 +8,7 @@ import br.com.sankhya.jape.wrapper.JapeFactory;
 import br.com.sankhya.jape.wrapper.JapeWrapper;
 import br.com.sankhya.jape.wrapper.fluid.FluidUpdateVO;
 import br.com.sankhya.modelcore.util.EntityFacadeFactory;
+import br.com.sankhya.platform.services.ConfirmacaoNotaService;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -74,6 +75,7 @@ final class AcaoEntradaDevolucaoDestinoSupport {
 
             DynamicVO modeloTransferencia = buscarModeloTransferencia(cabecalhoDao, notaOrigem.asBigDecimal("CODEMP"));
             BigDecimal nunotaGerada = gerarNotaTransferencia(notaOrigem, itensOrigem, localDestino, modeloTransferencia);
+            confirmarNotaGerada(cabecalhoDao, nunotaGerada, contexto);
             vincularNotaOrigem(cabecalhoDao, notaOrigem, nunotaGerada);
             notasGeradas.add(nunotaGerada);
         }
@@ -249,6 +251,20 @@ final class AcaoEntradaDevolucaoDestinoSupport {
             updateVO.set("CODLOCALORIG", localDestino);
             updateVO.set("CODCFO", gerarCodCfoDestino(itemNegativo.asBigDecimal("CODCFO")));
             updateVO.update();
+        }
+    }
+
+    private static void confirmarNotaGerada(JapeWrapper cabecalhoDao, BigDecimal nunotaGerada, ContextoAcao contexto)
+            throws Exception {
+        ConfirmacaoNotaService confirmacaoNotaService = new ConfirmacaoNotaService();
+        confirmacaoNotaService.set("NUNOTA", nunotaGerada);
+        confirmacaoNotaService.set("execAndCommit", Boolean.TRUE);
+        confirmacaoNotaService.execute();
+
+        DynamicVO notaConfirmada = cabecalhoDao.findOne("NUNOTA = ?", nunotaGerada);
+        if (notaConfirmada == null || !"L".equals(notaConfirmada.asString("STATUSNOTA"))) {
+            contexto.mostraErro("A transferencia gerada " + nunotaGerada.toPlainString()
+                    + " nao foi confirmada. Verifique as liberacoes pendentes antes de prosseguir.");
         }
     }
 
