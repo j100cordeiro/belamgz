@@ -12,6 +12,7 @@ import java.util.Set;
 
 final class AcaoAlteraLocalDevolucaoSupport {
 
+    private static final BigDecimal LOCAL_TRIAGEM = new BigDecimal("30100");
     private static final Set<BigDecimal> LOCAIS_PERMITIDOS = Collections.unmodifiableSet(
             new LinkedHashSet<BigDecimal>(Arrays.asList(new BigDecimal("10100"), new BigDecimal("20100"))));
 
@@ -53,6 +54,32 @@ final class AcaoAlteraLocalDevolucaoSupport {
         }
 
         contexto.setMensagemRetorno("Local alterado para " + localDestino.toPlainString() + " em "
+                + notas.size() + " nota(s).");
+    }
+
+    static void executarTriagem(ContextoAcao contexto) throws Exception {
+        Registro[] linhas = contexto.getLinhas();
+
+        if (linhas == null || linhas.length == 0) {
+            contexto.mostraErro("Selecione ao menos uma nota para alterar o local.");
+            return;
+        }
+
+        Set<BigDecimal> notas = coletarNotasSelecionadas(linhas, contexto);
+        QueryExecutor query = contexto.getQuery();
+
+        try {
+            for (BigDecimal nunota : notas) {
+                query.update("UPDATE TGFITE SET CODLOCALORIG = " + LOCAL_TRIAGEM.toPlainString()
+                        + " WHERE NUNOTA = " + nunota.toPlainString());
+            }
+        } finally {
+            if (query != null) {
+                query.close();
+            }
+        }
+
+        contexto.setMensagemRetorno("Local alterado para " + LOCAL_TRIAGEM.toPlainString() + " em "
                 + notas.size() + " nota(s).");
     }
 

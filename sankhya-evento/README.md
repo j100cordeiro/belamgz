@@ -48,6 +48,8 @@ Cadastro no Sankhya:
 Classe Java:
 - `br.com.bela.sankhya.evento.SincronizaDtEntSaiCompra`
 - (compatibilidade) `br.com.bela.sankhya.evento.SincronizaDtEntSaiCompraTGFCAB`
+- Bio: `br.com.bio.sankhya.evento.SincronizaDtEntSaiCompra`
+- Bio (compatibilidade): `br.com.bio.sankhya.evento.SincronizaDtEntSaiCompraTGFCAB`
 
 Objetivo:
 - manter `TGFCAB.DTENTSAI` sempre igual a `TGFCAB.DTNEG` em movimentos de compra (`TIPMOV = 'C'`);
@@ -59,6 +61,12 @@ Cadastro no Sankhya:
 - Tipo: `Rotina Java`
 - Momentos: `Before Insert` e `Before Update`
 - Classe: `br.com.bela.sankhya.evento.SincronizaDtEntSaiCompra`
+
+Cadastro recomendado na Biologistica:
+- Dicionario de Dados > `TGFCAB` > Eventos
+- Tipo: `Rotina Java`
+- Momentos: `Before Insert` e `Before Update`
+- Classe: `br.com.bio.sankhya.evento.SincronizaDtEntSaiCompraTGFCAB`
 
 ## Sincronismo de custo na transferencia para empresa 5
 Classe Java:

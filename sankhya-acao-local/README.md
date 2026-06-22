@@ -2,13 +2,16 @@
 
 Este pacote gera um `jar` com tres classes de botao de acao (`Rotina Java`) para uso no Sankhya:
 
+- `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao30100`
 - `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucaoSelecionavel`
 - `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao10100`
 - `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao20100`
+- `br.com.bela.sankhya.acao.AcaoMarcarPedidoNaoPendente`
 - `br.com.bela.sankhya.acao.AcaoGeraEntradaDevolucaoRma20100`
 - `br.com.bela.sankhya.acao.AcaoGeraEntradaDevolucaoSelecionavel`
 - `br.com.bela.sankhya.acao.AcaoGeraEntradaDevolucao10100`
 - `br.com.bela.sankhya.acao.AcaoGeraEntradaDevolucao20100`
+- `br.com.bela.sankhya.acao.AcaoCorrigirRejeicaoIbsCbs`
 
 Importante:
 
@@ -37,6 +40,18 @@ powershell -ExecutionPolicy Bypass -File ".\belamgz\sankhya-acao-local\build-jar
 
 ## Cadastro sugerido no Sankhya
 
+## Fluxo alinhado ao BHZ
+
+Etapa 1:
+
+- Classe: `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao30100`
+- Efeito: move a devolucao para a triagem `30100`
+
+Etapa 2:
+
+- Classe: `br.com.bela.sankhya.acao.AcaoGeraEntradaDevolucao10100`
+- Efeito: gera a transferencia WMS a partir da triagem `30100` com destino `10100`
+
 Tabela/instancia:
 
 - Tabela: `TGFCAB`
@@ -56,6 +71,48 @@ Classes fixas sem parametro:
 
 - `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao10100`
 - `br.com.bela.sankhya.acao.AcaoAlteraLocalDevolucao20100`
+
+## Botao para marcar pedido como nao pendente
+
+Tabela/instancia:
+
+- Tabela: `TGFCAB`
+- Instancia: `CabecalhoNota`
+- Tipo: `Rotina Java`
+
+Classe:
+
+- `br.com.bela.sankhya.acao.AcaoMarcarPedidoNaoPendente`
+
+Regra:
+
+- aceita uma ou mais linhas selecionadas
+- valida se `TIPMOV = 'P'`
+- atualiza `TGFCAB.PENDENTE = 'N'`
+
+## Botao para recalcular IBS/CBS e corrigir rejeicoes 232/1076
+
+Tabela/instancia:
+
+- Tabela: `TGFCAB`
+- Instancia: `CabecalhoNota`
+- Tipo: `Rotina Java`
+
+Classe:
+
+- `br.com.bela.sankhya.acao.AcaoCorrigirRejeicaoIbsCbs`
+
+Regra:
+
+- aceita uma ou mais notas selecionadas
+- chama a procedure existente `STP_CORRIGIR_NFE_REJEICAO`
+- a procedure corrige `TGFPAR.CLASSIFICMS` quando estiver `X`
+- depois executa `STP_CALCULAVITEM_IBS_CBS(P_NUNOTA, 0)`
+
+Uso sugerido:
+
+- aplicar em notas com retorno de autorizacao contendo rejeicao `232` ou `1076`
+- apos executar o botao, reenviar a nota para autorizacao
 
 ## Botao de geracao aceitando RMA 20100
 

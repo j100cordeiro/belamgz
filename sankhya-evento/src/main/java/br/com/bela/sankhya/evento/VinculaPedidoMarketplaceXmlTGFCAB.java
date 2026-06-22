@@ -173,7 +173,8 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
             }
 
             atualizarPedidoComNumeroNotaSaida(sql, nunotaPedido, nunotaFat);
-            atualizarPedidoComoNaoPendente(sql, nunotaPedido);
+            atualizarItensPedidoAtendidos(sql, nunotaPedido);
+            atualizarPedidoPendenteConformeItens(sql, nunotaPedido);
 
             registrarLogXml(sql, xmlInfo.nuarquivo,
                     "Vinculo OK. FAT=" + nunotaFat
@@ -510,13 +511,53 @@ public class VinculaPedidoMarketplaceXmlTGFCAB extends AbstractEventoProgramavel
         sql.executeUpdate();
     }
 
-    private void atualizarPedidoComoNaoPendente(NativeSql sql, BigDecimal nunotaPedido) throws Exception {
+    private void atualizarItensPedidoAtendidos(NativeSql sql, BigDecimal nunotaPedido) throws Exception {
+        sql.resetSqlBuf();
+        sql.appendSql("UPDATE TGFITE ped ");
+        sql.appendSql("   SET ped.QTDENTREGUE = ( ");
+        sql.appendSql("         SELECT NVL(SUM(nf.QTDNEG), 0) ");
+        sql.appendSql("           FROM TGFVAR v ");
+        sql.appendSql("           JOIN TGFITE nf ");
+        sql.appendSql("             ON nf.NUNOTA = v.NUNOTA ");
+        sql.appendSql("            AND nf.SEQUENCIA = v.SEQUENCIA ");
+        sql.appendSql("          WHERE v.NUNOTAORIG = ped.NUNOTA ");
+        sql.appendSql("            AND v.SEQUENCIAORIG = ped.SEQUENCIA ");
+        sql.appendSql("       ), ");
+        sql.appendSql("       ped.QTDFAT = ( ");
+        sql.appendSql("         SELECT NVL(SUM(nf.QTDNEG), 0) ");
+        sql.appendSql("           FROM TGFVAR v ");
+        sql.appendSql("           JOIN TGFITE nf ");
+        sql.appendSql("             ON nf.NUNOTA = v.NUNOTA ");
+        sql.appendSql("            AND nf.SEQUENCIA = v.SEQUENCIA ");
+        sql.appendSql("          WHERE v.NUNOTAORIG = ped.NUNOTA ");
+        sql.appendSql("            AND v.SEQUENCIAORIG = ped.SEQUENCIA ");
+        sql.appendSql("       ), ");
+        sql.appendSql("       ped.PENDENTE = CASE ");
+        sql.appendSql("         WHEN NVL(ped.QTDNEG, 0) > ( ");
+        sql.appendSql("              SELECT NVL(SUM(nf.QTDNEG), 0) ");
+        sql.appendSql("                FROM TGFVAR v ");
+        sql.appendSql("                JOIN TGFITE nf ");
+        sql.appendSql("                  ON nf.NUNOTA = v.NUNOTA ");
+        sql.appendSql("                 AND nf.SEQUENCIA = v.SEQUENCIA ");
+        sql.appendSql("               WHERE v.NUNOTAORIG = ped.NUNOTA ");
+        sql.appendSql("                 AND v.SEQUENCIAORIG = ped.SEQUENCIA ");
+        sql.appendSql("         ) THEN 'S' ELSE 'N' END ");
+        sql.appendSql(" WHERE ped.NUNOTA = :NUNOTAPED ");
+        sql.setNamedParameter("NUNOTAPED", nunotaPedido);
+        sql.executeUpdate();
+    }
+
+    private void atualizarPedidoPendenteConformeItens(NativeSql sql, BigDecimal nunotaPedido) throws Exception {
         sql.resetSqlBuf();
         sql.appendSql("UPDATE TGFCAB ");
-        sql.appendSql("   SET ").appendSql(FIELD_PENDENTE).appendSql(" = :NAOPENDENTE ");
+        sql.appendSql("   SET ").appendSql(FIELD_PENDENTE).appendSql(" = CASE ");
+        sql.appendSql("         WHEN EXISTS ( ");
+        sql.appendSql("              SELECT 1 ");
+        sql.appendSql("                FROM TGFITE ped ");
+        sql.appendSql("               WHERE ped.NUNOTA = :NUNOTAPED ");
+        sql.appendSql("                 AND NVL(ped.QTDNEG, 0) > GREATEST(NVL(ped.QTDENTREGUE, 0), NVL(ped.QTDFAT, 0)) ");
+        sql.appendSql("         ) THEN 'S' ELSE :NAOPENDENTE END ");
         sql.appendSql(" WHERE NUNOTA = :NUNOTAPED ");
-        sql.appendSql("   AND (").appendSql(FIELD_PENDENTE).appendSql(" IS NULL OR UPPER(TRIM(")
-                .appendSql(FIELD_PENDENTE).appendSql(")) <> :NAOPENDENTE) ");
         sql.setNamedParameter("NAOPENDENTE", VALUE_NAO_PENDENTE);
         sql.setNamedParameter("NUNOTAPED", nunotaPedido);
         sql.executeUpdate();

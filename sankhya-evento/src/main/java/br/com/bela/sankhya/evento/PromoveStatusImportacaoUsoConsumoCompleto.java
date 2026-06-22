@@ -13,11 +13,15 @@ import br.com.sankhya.jape.event.PersistenceEvent;
 import br.com.sankhya.jape.sql.NativeSql;
 import br.com.sankhya.modelcore.util.EntityFacadeFactory;
 
-public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
+/**
+ * Classe completa para TOP 2101: remove evento 75 indevido em TSILIB e promove status em TGFIXN.
+ * Use apenas esta classe em TGFIXN para resolver tudo com 1 evento.
+ */
+public class PromoveStatusImportacaoUsoConsumoCompleto extends AbstractEventoProgramavel
         implements EventoProgramavelJava {
 
     private static final Logger LOGGER =
-            Logger.getLogger(PromoveStatusImportacaoUsoConsumo.class.getName());
+            Logger.getLogger(PromoveStatusImportacaoUsoConsumoCompleto.class.getName());
 
     private static final BigDecimal CODTIPOPER_USO_CONSUMO = new BigDecimal("2101");
     private static final BigDecimal STATUS_PENDENTE_VALIDACAO = new BigDecimal("4");
@@ -61,12 +65,15 @@ public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
         try {
             jdbc.openSession();
 
+            // Primeiro: limpar TSILIB (remover evento 75 indevido)
             limparLiberacaoFiscal(sql, nunota);
 
+            // Segundo: verificar se ainda há liberações pendentes
             if (existeLiberacaoPendente(sql, nunota)) {
                 return;
             }
 
+            // Terceiro: promover status em TGFIXN
             sql.resetSqlBuf();
             sql.appendSql("UPDATE TGFIXN ");
             sql.appendSql("   SET STATUS = :STATUSPROCESSADO ");
@@ -79,7 +86,7 @@ public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
             sql.setNamedParameter("STATUSPENDENTE", STATUS_PENDENTE_VALIDACAO);
             sql.executeUpdate();
 
-            LOGGER.info("[IXN2101] Status promovido para 5. NUARQUIVO=" + nuarquivo
+            LOGGER.info("[IXN2101-COMPLETO] Status promovido para 5 e TSILIB limpo. NUARQUIVO=" + nuarquivo
                     + ", NUNOTA=" + nunota
                     + ", evento=" + origemEvento);
 
@@ -90,9 +97,7 @@ public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
     }
 
     /**
-     * NOVA REGRA:
-     * - Se tiver CFOP → NÃO remove
-     * - Qualquer outra divergência → REMOVE
+     * Remove evento 75 indevido em TSILIB, exceto se for CFOP.
      */
     private void limparLiberacaoFiscal(NativeSql sql, BigDecimal nunota) throws Exception {
         java.sql.ResultSet rs = null;
@@ -119,7 +124,7 @@ public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
 
             // 🚨 SE TIVER CFOP → NÃO REMOVE
             if (texto.contains(TEXTO_ERRO_CFOP)) {
-                LOGGER.info("[IXN2101] Divergência de CFOP encontrada. Não será removida.");
+                LOGGER.info("[IXN2101-COMPLETO] Divergência de CFOP encontrada. Não será removida.");
                 return;
             }
 
@@ -141,7 +146,7 @@ public class PromoveStatusImportacaoUsoConsumo extends AbstractEventoProgramavel
         sql.setNamedParameter("EVENTO", EVENTO_DIVERGENCIA_FISCAL);
         sql.executeUpdate();
 
-        LOGGER.info("[IXN2101] Liberação fiscal removida automaticamente. NUNOTA=" + nunota);
+        LOGGER.info("[IXN2101-COMPLETO] Liberação fiscal removida automaticamente. NUNOTA=" + nunota);
     }
 
     private boolean existeLiberacaoPendente(NativeSql sql, BigDecimal nunota) throws Exception {

@@ -2,7 +2,6 @@ package br.com.bela.sankhya.evento;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
-import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -31,13 +30,8 @@ public class IgnoraLiberacaoDivergenciaFiscalUsoConsumo extends AbstractEventoPr
     private static final String FIELD_TABELA = "TABELA";
     private static final String FIELD_NUCHAVE = "NUCHAVE";
     private static final String FIELD_SEQUENCIA = "SEQUENCIA";
-    private static final String FIELD_OBSERVACAO = "OBSERVACAO";
 
     private static final String TABELA_CABECALHO = "TGFCAB";
-    private static final String TEXTO_ERRO_NCM = "PRODS. ERRO NCM";
-    private static final String TEXTO_ERRO_CEST = "PRODS. ERRO CEST";
-    private static final String TEXTO_ERRO_ORIGEM = "PRODS. ERRO ORIGEM";
-    private static final String TEXTO_ERRO_FCI = "PRODS. ERRO FCI";
 
     @Override
     public void afterInsert(PersistenceEvent event) throws Exception {
@@ -60,7 +54,6 @@ public class IgnoraLiberacaoDivergenciaFiscalUsoConsumo extends AbstractEventoPr
         String tabela = trimToEmpty(getString(vo, FIELD_TABELA));
         BigDecimal nuchave = getBigDecimal(vo, FIELD_NUCHAVE);
         BigDecimal sequencia = normalizarSequencia(getBigDecimal(vo, FIELD_SEQUENCIA));
-        String observacao = getString(vo, FIELD_OBSERVACAO);
 
         if (!CODTIPOPER_USO_CONSUMO.equals(codtipoper)) {
             return;
@@ -72,9 +65,6 @@ public class IgnoraLiberacaoDivergenciaFiscalUsoConsumo extends AbstractEventoPr
             return;
         }
         if (nuchave == null) {
-            return;
-        }
-        if (!isObservacaoSomenteDivergenciaIgnoravel(observacao)) {
             return;
         }
 
@@ -99,39 +89,17 @@ public class IgnoraLiberacaoDivergenciaFiscalUsoConsumo extends AbstractEventoPr
             sql.appendSql("   AND TABELA = :TABELA ");
             sql.appendSql("   AND NUCHAVE = :NUCHAVE ");
             sql.appendSql("   AND NVL(SEQUENCIA, 0) = :SEQUENCIA ");
-            sql.appendSql("   AND (UPPER(NVL(OBSERVACAO, ' ')) LIKE :ERRONCM ");
-            sql.appendSql("        OR UPPER(NVL(OBSERVACAO, ' ')) LIKE :ERROCEST) ");
-            sql.appendSql("   AND UPPER(NVL(OBSERVACAO, ' ')) NOT LIKE :ERROORIGEM ");
-            sql.appendSql("   AND UPPER(NVL(OBSERVACAO, ' ')) NOT LIKE :ERROFCI ");
 
             sql.setNamedParameter("CODTIPOPER", CODTIPOPER_USO_CONSUMO);
             sql.setNamedParameter("EVENTO", EVENTO_DIVERGENCIA_FISCAL);
             sql.setNamedParameter("TABELA", TABELA_CABECALHO);
             sql.setNamedParameter("NUCHAVE", nuchave);
             sql.setNamedParameter("SEQUENCIA", sequencia);
-            sql.setNamedParameter("ERRONCM", "%" + TEXTO_ERRO_NCM + "%");
-            sql.setNamedParameter("ERROCEST", "%" + TEXTO_ERRO_CEST + "%");
-            sql.setNamedParameter("ERROORIGEM", "%" + TEXTO_ERRO_ORIGEM + "%");
-            sql.setNamedParameter("ERROFCI", "%" + TEXTO_ERRO_FCI + "%");
             sql.executeUpdate();
         } finally {
             NativeSql.releaseResources(sql);
             JdbcWrapper.closeSession(jdbc);
         }
-    }
-
-    private boolean isObservacaoSomenteDivergenciaIgnoravel(String observacao) {
-        String texto = trimToEmpty(observacao).toUpperCase(Locale.ROOT);
-        if (texto.isEmpty()) {
-            return false;
-        }
-
-        boolean temNcm = texto.contains(TEXTO_ERRO_NCM);
-        boolean temCest = texto.contains(TEXTO_ERRO_CEST);
-        boolean temOrigem = texto.contains(TEXTO_ERRO_ORIGEM);
-        boolean temFci = texto.contains(TEXTO_ERRO_FCI);
-
-        return (temNcm || temCest) && !temOrigem && !temFci;
     }
 
     private Object extrairVoCompat(PersistenceEvent event) {

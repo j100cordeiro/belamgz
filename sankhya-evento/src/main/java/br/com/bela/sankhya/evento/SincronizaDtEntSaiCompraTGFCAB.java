@@ -1,27 +1,21 @@
 package br.com.bela.sankhya.evento;
 
 import java.lang.reflect.Method;
-import java.math.BigDecimal;
-import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.util.Date;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import br.com.sankhya.extensions.eventoprogramavel.EventoProgramavelJava;
-import br.com.sankhya.jape.EntityFacade;
-import br.com.sankhya.jape.dao.JdbcWrapper;
 import br.com.sankhya.jape.event.PersistenceEvent;
-import br.com.sankhya.jape.sql.NativeSql;
-import br.com.sankhya.modelcore.util.EntityFacadeFactory;
+import br.com.sankhya.jape.vo.DynamicVO;
 
 /**
  * Mantem DTENTSAI igual a DTNEG em movimentos de compra da TGFCAB.
  *
  * Regras:
- * - no before insert/update: tenta sincronizar o VO em memoria;
- * - no after insert/update: grava direto na TGFCAB para garantir persistencia;
- * - edicao manual nao permanece apos salvar, pois o after update volta DTENTSAI para DTNEG.
+ * - no before insert/update: sincroniza o VO em memoria;
+ * - no before update: quando o runtime expuser oldVO, bloqueia edicao manual de DTENTSAI;
+ * - no after insert/update: nao faz round-trip ao banco; a persistencia ocorre pelo proprio before.
  */
 public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel implements EventoProgramavelJava {
 
@@ -36,27 +30,28 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
 
     @Override
     public void beforeInsert(PersistenceEvent event) throws Exception {
-        sincronizarDtEntSai(event);
+        sincronizarDtEntSai(extrairVo(event));
     }
 
     @Override
     public void beforeUpdate(PersistenceEvent event) throws Exception {
-        validarEdicaoManualDtEntSai(event);
-        sincronizarDtEntSai(event);
+        DynamicVO vo = extrairVo(event);
+        DynamicVO oldVo = extrairOldVoCompat(event);
+        validarEdicaoManualDtEntSai(vo, oldVo);
+        sincronizarDtEntSai(vo);
     }
 
     @Override
     public void afterInsert(PersistenceEvent event) throws Exception {
-        sincronizarDtEntSaiBanco(event);
+        // Sem round-trip ao banco. O VO ja foi sincronizado no beforeInsert.
     }
 
     @Override
     public void afterUpdate(PersistenceEvent event) throws Exception {
-        sincronizarDtEntSaiBanco(event);
+        // Sem round-trip ao banco. O VO ja foi sincronizado no beforeUpdate.
     }
 
-    private void sincronizarDtEntSai(PersistenceEvent event) throws Exception {
-        Object vo = extrairVoCompat(event);
+    private void sincronizarDtEntSai(DynamicVO vo) throws Exception {
         if (vo == null) {
             return;
         }
@@ -74,41 +69,7 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
         setPropertyValue(vo, FIELD_DTENTSAI, normalizarData(dtneg));
     }
 
-    private void sincronizarDtEntSaiBanco(PersistenceEvent event) throws Exception {
-        Object vo = extrairVoCompat(event);
-        BigDecimal nunota = getBigDecimal(vo, FIELD_NUNOTA);
-        if (nunota == null) {
-            LOGGER.fine("[DTENTSAI] NUNOTA nula no after event. Sincronizacao em banco ignorada.");
-            return;
-        }
-
-        EntityFacade facade = EntityFacadeFactory.getDWFFacade();
-        JdbcWrapper jdbc = facade.getJdbcWrapper();
-        NativeSql sql = new NativeSql(jdbc);
-
-        try {
-            jdbc.openSession();
-
-            if (!isCompra(sql, nunota)) {
-                return;
-            }
-
-            sql.resetSqlBuf();
-            sql.appendSql("UPDATE TGFCAB ");
-            sql.appendSql("   SET DTENTSAI = DTNEG ");
-            sql.appendSql(" WHERE NUNOTA = :NUNOTA ");
-            sql.appendSql("   AND TIPMOV = 'C' ");
-            sql.appendSql("   AND (DTENTSAI IS NULL OR DTENTSAI <> DTNEG) ");
-            sql.setNamedParameter("NUNOTA", nunota);
-            sql.executeUpdate();
-        } finally {
-            NativeSql.releaseResources(sql);
-            JdbcWrapper.closeSession(jdbc);
-        }
-    }
-
-    private void validarEdicaoManualDtEntSai(PersistenceEvent event) throws Exception {
-        Object vo = extrairVoCompat(event);
+    private void validarEdicaoManualDtEntSai(DynamicVO vo, DynamicVO oldVo) throws Exception {
         if (vo == null) {
             return;
         }
@@ -117,109 +78,55 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
             return;
         }
 
-        BigDecimal nunota = getBigDecimal(vo, FIELD_NUNOTA);
-        if (nunota == null) {
+        if (oldVo == null || !isMovimentoCompra(getString(oldVo, FIELD_TIPMOV))) {
             return;
         }
 
         Object dtnegAtual = getPropertyValue(vo, FIELD_DTNEG);
         Object dtEntSaiAtual = getPropertyValue(vo, FIELD_DTENTSAI);
+        Object dtnegAnterior = getPropertyValue(oldVo, FIELD_DTNEG);
+        Object dtEntSaiAnterior = getPropertyValue(oldVo, FIELD_DTENTSAI);
 
-        EntityFacade facade = EntityFacadeFactory.getDWFFacade();
-        JdbcWrapper jdbc = facade.getJdbcWrapper();
-        NativeSql sql = new NativeSql(jdbc);
+        boolean dtnegMudou = !datasIguais(dtnegAtual, dtnegAnterior);
+        boolean dtEntSaiMudou = !datasIguais(dtEntSaiAtual, dtEntSaiAnterior);
 
-        try {
-            jdbc.openSession();
-
-            LinhaCabecalho linhaAtual = buscarLinhaAtual(sql, nunota);
-            if (linhaAtual == null || !isMovimentoCompra(linhaAtual.tipmov)) {
-                return;
-            }
-
-            boolean dtnegMudou = !datasIguais(dtnegAtual, linhaAtual.dtneg);
-            boolean dtEntSaiMudou = !datasIguais(dtEntSaiAtual, linhaAtual.dtentsai);
-
-            if (dtEntSaiMudou && !dtnegMudou) {
-                throw new Exception("Nao e permitido editar manualmente a Dt. Entrada/Saida. "
-                        + "Altere apenas a Dt. Negociacao.");
-            }
-        } finally {
-            NativeSql.releaseResources(sql);
-            JdbcWrapper.closeSession(jdbc);
+        if (dtEntSaiMudou && !dtnegMudou) {
+            throw new Exception("Nao e permitido editar manualmente a Dt. Entrada/Saida. "
+                    + "Altere apenas a Dt. Negociacao.");
         }
     }
 
-    private boolean isCompra(NativeSql sql, BigDecimal nunota) throws Exception {
-        ResultSet rs = null;
-        try {
-            sql.resetSqlBuf();
-            sql.appendSql("SELECT TIPMOV FROM TGFCAB WHERE NUNOTA = :NUNOTA");
-            sql.setNamedParameter("NUNOTA", nunota);
-            rs = sql.executeQuery();
-            if (!rs.next()) {
-                return false;
-            }
-            return isMovimentoCompra(rs.getString("TIPMOV"));
-        } finally {
-            closeQuietly(rs);
-        }
+    private DynamicVO extrairVo(PersistenceEvent event) {
+        return event == null ? null : event.getVo();
     }
 
-    private LinhaCabecalho buscarLinhaAtual(NativeSql sql, BigDecimal nunota) throws Exception {
-        ResultSet rs = null;
-        try {
-            sql.resetSqlBuf();
-            sql.appendSql("SELECT TIPMOV, DTNEG, DTENTSAI ");
-            sql.appendSql("  FROM TGFCAB ");
-            sql.appendSql(" WHERE NUNOTA = :NUNOTA");
-            sql.setNamedParameter("NUNOTA", nunota);
-            rs = sql.executeQuery();
-            if (!rs.next()) {
-                return null;
-            }
-
-            LinhaCabecalho linha = new LinhaCabecalho();
-            linha.tipmov = rs.getString("TIPMOV");
-            linha.dtneg = rs.getTimestamp("DTNEG");
-            linha.dtentsai = rs.getTimestamp("DTENTSAI");
-            return linha;
-        } finally {
-            closeQuietly(rs);
-        }
-    }
-
-    private Object extrairVoCompat(PersistenceEvent event) {
+    private DynamicVO extrairOldVoCompat(PersistenceEvent event) {
         if (event == null) {
             return null;
         }
         try {
-            Method method = event.getClass().getMethod("getVo");
-            return method.invoke(event);
-        } catch (Exception e) {
+            Method method = event.getClass().getMethod("getOldVO");
+            Object value = method.invoke(event);
+            return value instanceof DynamicVO ? (DynamicVO) value : null;
+        } catch (Exception ignored) {
             try {
-                Method method = event.getClass().getMethod("getVO");
-                return method.invoke(event);
-            } catch (Exception ignored) {
-                LOGGER.log(Level.WARNING, "[DTENTSAI] Nao foi possivel obter VO do evento.", e);
+                Method method = event.getClass().getMethod("getOldVo");
+                Object value = method.invoke(event);
+                return value instanceof DynamicVO ? (DynamicVO) value : null;
+            } catch (Exception ignoredAgain) {
                 return null;
             }
         }
     }
 
-    private Object getPropertyValue(Object vo, String field) {
+    private Object getPropertyValue(DynamicVO vo, String field) {
         if (vo == null || field == null) {
             return null;
         }
-        try {
-            Method getter = vo.getClass().getMethod("getProperty", String.class);
-            return getter.invoke(vo, field);
-        } catch (Exception e) {
-            return null;
-        }
+        return vo.getProperty(field);
     }
 
-    private void setPropertyValue(Object vo, String field, Object value) throws Exception {
+    private void setPropertyValue(DynamicVO vo, String field, Object value) throws Exception {
         try {
             Method setter = vo.getClass().getMethod("setProperty", String.class, Object.class);
             setter.invoke(vo, field, value);
@@ -239,24 +146,6 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
         throw new Exception("Nao foi possivel atribuir " + field + " no VO da TGFCAB.");
     }
 
-    private BigDecimal getBigDecimal(Object vo, String field) {
-        try {
-            Object value = getPropertyValue(vo, field);
-            if (value == null) {
-                return null;
-            }
-            if (value instanceof BigDecimal) {
-                return (BigDecimal) value;
-            }
-            if (value instanceof Number) {
-                return new BigDecimal(value.toString());
-            }
-            return new BigDecimal(value.toString());
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     private Object normalizarData(Object value) {
         if (value instanceof Timestamp) {
             return value;
@@ -267,7 +156,7 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
         return value;
     }
 
-    private String getString(Object vo, String field) {
+    private String getString(DynamicVO vo, String field) {
         Object value = getPropertyValue(vo, field);
         return value == null ? null : value.toString();
     }
@@ -308,19 +197,4 @@ public class SincronizaDtEntSaiCompraTGFCAB extends AbstractEventoProgramavel im
         return null;
     }
 
-    private void closeQuietly(ResultSet rs) {
-        if (rs == null) {
-            return;
-        }
-        try {
-            rs.close();
-        } catch (Exception ignored) {
-        }
-    }
-
-    private static final class LinhaCabecalho {
-        private String tipmov;
-        private Timestamp dtneg;
-        private Timestamp dtentsai;
-    }
 }
